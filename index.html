@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="UTF-8">
+    <title>Learnvolleysorcecodenote by basti-shi031</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" type="text/css" href="stylesheets/normalize.css" media="screen">
+    <link href='https://fonts.googleapis.com/css?family=Open+Sans:400,700' rel='stylesheet' type='text/css'>
+    <link rel="stylesheet" type="text/css" href="stylesheets/stylesheet.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="stylesheets/github-light.css" media="screen">
+  </head>
+  <body>
+    <section class="page-header">
+      <h1 class="project-name">Learnvolleysorcecodenote</h1>
+      <h2 class="project-tagline">Volley源码学习</h2>
+      <a href="https://github.com/basti-shi031/LearnVolleySorceCodeNote" class="btn">View on GitHub</a>
+      <a href="https://github.com/basti-shi031/LearnVolleySorceCodeNote/zipball/master" class="btn">Download .zip</a>
+      <a href="https://github.com/basti-shi031/LearnVolleySorceCodeNote/tarball/master" class="btn">Download .tar.gz</a>
+    </section>
+
+    <section class="main-content">
+      <p>1.设计图
+（StringRequest  JSonRequest ImageRequest） 构成 RequestQueue
+=&gt;
+(CacheDispatcher NetworkDispatcher)  构成 Dispatch Thread
+=&gt;
+(Cache HttpClientStack HurlStack) 构成 Get Data Interface
+=&gt;
+(Memory和File System    Server) 构成Server</p>
+
+<p>2.Volley中的概念
+ 1) Volley：对外暴露的API，通过newRequeueQueue新建并启动一个队列RequestQueue后，然后加入add和Request。
+ 2）Request 抽象类 用于请求。子类有StringRequest，JsonRequest,ImageRequest
+ 3）RequestQueue：请求队列，包含CacheDispatcher（缓存的调度线程），NetWorkDispatcher（网络请求调度线程），ResponseDelivery(返回结果分发接口)，通过start（）启动CacheDispatcher和NetworkDispatcher;
+ 4) CacheDisPatcher：缓存线程调度，启动后不断从缓存请求队列中取请求处理，队列为空则等待，处理结束则传递给ResponseDelivery处理
+ 5) ResponseDelivery：返回结果分发接口
+ 6）HttpStack：处理Http的请求，返回请求结果，基于HttpURLConnection的HurlStack和基于Apache HttpClient的HttpClientStack
+ 7）Network:调用HttpStack处理请求，并将结果转换为能被ResponseDeliver处理的NetworkResponse</p>
+
+<p>3.流程</p>
+
+<pre><code>       主线程                          缓存调度线程                   (丢失)         网络调度线程
+将请求加入缓存列表-----------------&gt;缓存调度线程从缓存队列中读取一个请求-------&gt;网络调度线程从网络队列中取出一个请求
+                        |                               
+                        |（命中）
+                        |
+将解析后的响应传递到主线程&lt;-----------从缓存中读取响应并解析                      Http请求传输、解析、写缓存
+            |                                                                           |
+            |                                                                           |
+            &lt;---------------------------------------------------------------------------|
+</code></pre>
+
+<p>4.功能
+ 4.1 volley.java
+    工具类，构建一个RequestQueue对象
+    4.1.1 主要函数
+    public static RequestQueue newRequestQueue(Context context)
+    public static RequestQueue newRequestQueue(Context context, HttpStack stack)</p>
+
+<pre><code>第一个构造函数调用了第二个构造函数，如果API Level&gt;=9 则采用基于HttpURLConnection的HurlStack，若小于9，则采用基于HttpClient的HttpClient的HttpClientStack
+随后，构造一个利用stack构造出一个网络的具体实现，并和Cache共同构建一个RequestQueue，并start。
+</code></pre>
+
+<p>4.2 Request.java
+    网络请求的抽象类，子类有StringRequest JsonRequest ImageRequest，并将他们加入到RequestQueue中来完成一次网络请求操作
+    8种http请求方式，GET POST PUT DELETE HEAD OPTIONS TRACE PATCH
+    Request类中包含了请求url，请求方式，请求Header，请求Body，请求优先级等信息
+    子类需要重写两个方法 parseNetworkResponse 网络数据返回的字节内容转化为特定的类型
+                        deliverResponse 将转化后的内容传给监听回调
+    getBody（）构建用于POST PUT PATCH请求方式的Body内容
+    getParams 在getBody没有被重写的情况下，返回值会被以key value 的方式编码后转化为字节码作为Body内容
+ 4.3 RequestQueue.java
+    4.3.1RequestQueue中有两个基于优先级的Request队列，缓存请求队列和网络请求队列
+    放在缓存请求队列中的Request，将通过缓存获得数据，放在网络请求队列中的Request，通过网络获取数据
+    private final PriorityBlockingQueue&gt; mCacheQueue = new PriorityBlockingQueue&gt;();
+    private final PriorityBlockingQueue&gt; mNetworkQueue = new PriorityBlockingQueue&gt;();
+    一个正在进行中，尚未完成的请求集合
+    private final Set&gt; mCurrentRequests = new HashSet&gt;();
+    一个等待请求的集合
+    private final Map&gt;&gt; mWaitingRequests = new HashMap&gt;&gt;();
+    4.3.2 启动
+    创建出RequestQueue后，调用start方法，启动Queue。
+    start方法中，开启了一个缓存调度线程和4个网络调度线程，缓存调度线程从缓存请求队列中取出Request处理，网络调度线程从网络请求队列中取出Request处理
+    4.3.3 加入队列</p>
+
+<pre><code>开始--&gt;请求到来--&gt;添加到当前队列中mCurrentRequests中--&gt;为请求添加唯一的序列号--&gt;请求是否允许被缓存--&gt;(N)添加到网络请求队列中
+                                        |                   
+                                                                       (Y)是否存在相同的请求正在被处理--&gt;（N）创建新的等待当前请求的空队列，添加到缓存队列    
+                                                                                |
+                                                                                |
+                                                                    （Y）加入到相同请求的等待队列中
+4.3.4 请求完成
+    1.先从正在请求的队列中移除该请求
+    2.查找在等待请求集合中是否存在等待的请求，如果有则删除，将等待队列移除，并将所有请求添加到缓存请求队列中，并让缓存请求处理线程自动处理
+
+4.3.5 请求取消
+    1.cancel All（RequestFilter rf）
+    2.cancel All (final Object o)
+        第一个函数按照过滤器取消请求，第二个函数按照tag取消
+</code></pre>
+
+      <footer class="site-footer">
+        <span class="site-footer-owner"><a href="https://github.com/basti-shi031/LearnVolleySorceCodeNote">Learnvolleysorcecodenote</a> is maintained by <a href="https://github.com/basti-shi031">basti-shi031</a>.</span>
+
+        <span class="site-footer-credits">This page was generated by <a href="https://pages.github.com">GitHub Pages</a> using the <a href="https://github.com/jasonlong/cayman-theme">Cayman theme</a> by <a href="https://twitter.com/jasonlong">Jason Long</a>.</span>
+      </footer>
+
+    </section>
+
+  
+  </body>
+</html>
